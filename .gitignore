@@ -31,15 +31,16 @@ go.work.sum
 # .idea/
 # .vscode/
 
-# Exclude binaries
+# Exclude files in ddp
 ddp/ddp
-ddpctl/ddpctl
-
-# Exclude config and certs
 ddp/config.json
 ddp/aliases.json
 ddp/*.crt
 ddp/*.key
+
+# Exclude files in ddpctl
+ddpctl/ddpctl
+ddpctl/config.json
 
 
 

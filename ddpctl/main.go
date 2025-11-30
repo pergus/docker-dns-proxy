@@ -36,6 +36,8 @@ type Config struct {
 var (
 	cfg        Config
 	configFile string
+
+	defaultAdminURL = "https://localhost:6060"
 )
 
 var manual = `
@@ -66,7 +68,7 @@ CONFIGURATION FILE
        }
 
 ADMIN API URL
-       By default, ddpctl uses http://localhost:6060. You can override it
+       By default, ddpctl uses https://localhost:6060. You can override it
        using:
 
            --url <admin-api-url>
@@ -169,7 +171,7 @@ func main() {
 		Long:  "Control the docker-dns-proxy",
 	}
 
-	rootCmd.PersistentFlags().StringVar(&cfg.AdminURL, "url", "http://localhost:6060", "Admin API URL")
+	rootCmd.PersistentFlags().StringVar(&cfg.AdminURL, "url", defaultAdminURL, "Admin API URL")
 	rootCmd.PersistentFlags().StringVar(&cfg.Token, "token", "", "Bearer token for admin API")
 	rootCmd.PersistentFlags().StringVar(&configFile, "config", "", "Optional config file with admin_url and token")
 
@@ -295,7 +297,7 @@ func main() {
 				fmt.Println("Error:", err)
 				return
 			}
-			fmt.Println("ddp server version:", v["ddp_version"])
+			fmt.Println("ddp server", cfg.AdminURL, "version:", v["ddp_version"])
 		},
 	})
 
@@ -322,7 +324,7 @@ func loadConfigFile(path string) {
 	}
 
 	// Only set values from file if not already set via flags
-	if cfg.AdminURL == "" {
+	if fileCfg.AdminURL != "" && fileCfg.AdminURL != defaultAdminURL {
 		cfg.AdminURL = fileCfg.AdminURL
 	}
 	if cfg.Token == "" {
