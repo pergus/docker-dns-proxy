@@ -35,12 +35,12 @@ Docker DNS Proxy (DDP) is a Docker-aware DNS and HTTPS reverse proxy that automa
 ### Build from Source
 
 ```bash
-git clone https://github.com/<your-username>/docker-dns-proxy.git
+git clone https://github.com/pergus/docker-dns-proxy.git
 cd docker-dns-proxy
 cd ddp
-go build -o ddp
+go build
 cd ../ddpctl
-go build -o ddpctl
+go build
 ```
 
 
