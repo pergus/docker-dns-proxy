@@ -14,7 +14,7 @@ Docker DNS Proxy (DDP) is a Docker-aware DNS and HTTPS reverse proxy that automa
 - [Usage](#usage)
   - [ddp (Server)](#ddp-server)
   - [ddpctl (CLI)](#ddpctl-cli)
-- [Configuration](#configuration)
+- [Access Docker Containers](#access-docker-containers)
 - [Admin API](#admin-api)
 - [License](#license)
 
@@ -115,6 +115,20 @@ Example:
 
 ---
 
+## Access Docker Containers
+
+DDP automatically discovers running Docker containers and exposes them under the configured domain.
+
+#### Example
+
+Suppose you have a Docker container named `webapp` running on port 8080.
+
+- DDP creates a DNS entry: `webapp.mydomain`
+- Access it via HTTPS: `https://webapp.mydomain`
+
+Aliases and multiple targets per host can be managed using `ddpctl` or the Admin API.
+
+---
 
 ## Admin API
 
