@@ -173,10 +173,10 @@ func main() {
 
 	rootCmd.PersistentFlags().StringVar(&cfg.AdminURL, "url", defaultAdminURL, "Admin API URL")
 	rootCmd.PersistentFlags().StringVar(&cfg.Token, "token", "", "Bearer token for admin API")
-	rootCmd.PersistentFlags().StringVar(&configFile, "config", "", "Optional config file with admin_url and token")
+	rootCmd.PersistentFlags().StringVar(&configFile, "config", "config.json", "Optional config file with admin_url and token")
 
 	cobra.OnInitialize(func() {
-		if configFile != "" {
+		if _, err := os.Stat(configFile); err == nil {
 			loadConfigFile(configFile)
 		}
 	})
