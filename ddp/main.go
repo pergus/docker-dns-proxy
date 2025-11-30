@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"flag"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -35,6 +36,7 @@ type Config struct {
 	ExcludedPorts []int  `json:"excluded_ports,omitempty"` // List of exluded ports
 	HostIP        string `json:"host_ip,omitempty"`        // The Host IP Address
 	AliasFile     string `json:"alias_file,omitempty"`     // filename to persist aliases
+	Token         string `json:"token"`                    // Bearer token
 }
 
 // HostEntry represents a DNS/proxy entryf
@@ -50,10 +52,10 @@ var (
 	hosts      = map[string]*HostEntry{}
 	hostsLock  = sync.RWMutex{}
 	cfg        Config
-	ddpVersion = "0.1.0"
+	ddpVersion = "0.1.2"
 )
 
-var help = `
+var manual = `
 DDP(1)                           USER COMMANDS                          DDP(1)
 
 NAME
@@ -87,6 +89,7 @@ CONFIGURATION OPTIONS
         "excluded_ports"    - List of container ports to ignore, e.g., [22, 2375].
         "host_ip"           - IP returned in DNS responses (default: auto-detected).
         "alias_file"        - Path to file where aliases are persisted (default "aliases.json").
+        "token"             - Bearer token for authentiction.
 
 	Notes:
     	- host_ip is the IP that will appear in DNS responses for managed hosts. 
@@ -100,13 +103,14 @@ CONFIGURATION OPTIONS
 ADMIN API
     The Admin API provides endpoints for managing hosts, aliases, targets, and
     retrieving the server version. All endpoints use HTTP and respond with JSON.
+	When appending ?pretty to a request, the JSON returned will be pretty formatted 
 
 LIST HOSTS
     GET /hosts
     Returns a JSON array of all registered hosts.
     
     Example:
-        curl http://<server>/hosts
+        curl -H "Authorization: Bearer <token>" https://<server>/hosts
 
 ADD HOST
     POST /hosts
@@ -120,15 +124,17 @@ ADD HOST
 
     Example:
         curl -X POST -H "Content-Type: application/json" \
+             -H "Authorization: Bearer <token>" \
              -d '{"name":"<host>","aliases":["<alias>"]}' \
-             http://<server>/hosts
+             https://<server>/hosts
 
 DELETE HOST
     DELETE /hosts/{hostname}
     Deletes the specified host and all associated aliases.
 
     Example:
-        curl -X DELETE http://<server>/hosts/<host>
+        curl -X DELETE -H "Authorization: Bearer <token>" \
+             https://<server>/hosts/<host>
 
 ADD ALIAS
     POST /hosts/{hostname}/alias
@@ -141,8 +147,9 @@ ADD ALIAS
 
     Example:
         curl -X POST -H "Content-Type: application/json" \
+             -H "Authorization: Bearer <token>" \
              -d '{"alias":"<alias>"}' \
-             http://<server>/hosts/<host>/alias
+             https://<server>/hosts/<host>/alias
 
 LIST TARGETS
     GET /hosts/{hostname}/targets
@@ -156,7 +163,8 @@ LIST TARGETS
     }
 
     Example:
-        curl http://<server>/hosts/<host>/targets
+        curl -H "Authorization: Bearer <token>" \
+             https://<server>/hosts/<host>/targets
 
 SET ACTIVE TARGET
     POST /hosts/{hostname}/target
@@ -169,15 +177,16 @@ SET ACTIVE TARGET
 
     Example:
         curl -X POST -H "Content-Type: application/json" \
+             -H "Authorization: Bearer <token>" \
              -d '{"active_target":<target_index>}' \
-             http://<server>/hosts/<host>/target
+             https://<server>/hosts/<host>/target
 
 GET DDP VERSION
     GET /version
     Returns the current version of the DDP server.
 
     Example:
-        curl http://<server>/version
+        curl -H "Authorization: Bearer <token>" https://<server>/version
 
 SEE ALSO
     ddpctl(1)
@@ -206,6 +215,21 @@ func appendIfMissing(slice []string, s string) []string {
 		return slice
 	}
 	return append(slice, s)
+}
+
+func authMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// Only check token if it's set
+		if cfg.Token != "" {
+			auth := r.Header.Get("Authorization")
+			expected := "Bearer " + cfg.Token
+			if auth != expected {
+				http.Error(w, "401 Unauthorized", http.StatusUnauthorized)
+				return
+			}
+		}
+		next(w, r)
+	}
 }
 
 // -----------------------------------------------------------------------------
@@ -295,38 +319,72 @@ func saveAliasToFile(alias, target string) {
 // REST Admin API
 // -----------------------------------------------------------------------------
 
+func writeJSON(w http.ResponseWriter, data interface{}, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+
+	if _, ok := r.URL.Query()["pretty"]; ok {
+		b, err := json.MarshalIndent(data, "", "  ")
+		if err != nil {
+			http.Error(w, fmt.Sprintf("JSON encoding error: %v", err), http.StatusInternalServerError)
+			return
+		}
+		b = append(b, '\n')
+		w.Write(b)
+	} else {
+		if err := json.NewEncoder(w).Encode(data); err != nil {
+			http.Error(w, fmt.Sprintf("JSON encoding error: %v", err), http.StatusInternalServerError)
+		}
+	}
+}
+
 func listHosts(w http.ResponseWriter, r *http.Request) {
 	hostsLock.RLock()
 	defer hostsLock.RUnlock()
+
 	list := []*HostEntry{}
 	for _, h := range hosts {
 		list = append(list, h)
 	}
 
-	// Sort hosts alphabetically by Name
-	sort.Slice(list, func(i, j int) bool {
-		return list[i].Name < list[j].Name
-	})
+	// Sort alphabetically
+	sort.Slice(list, func(i, j int) bool { return list[i].Name < list[j].Name })
 
-	_ = json.NewEncoder(w).Encode(list)
+	writeJSON(w, list, r)
 }
 
 func addHost(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+
 	var h HostEntry
 	if err := json.NewDecoder(r.Body).Decode(&h); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
+	if h.Name == "" {
+		http.Error(w, "host name is required", http.StatusBadRequest)
+		return
+	}
+
 	hostsLock.Lock()
 	defer hostsLock.Unlock()
+
+	if _, exists := hosts[h.Name]; exists {
+		http.Error(w, "host already exists", http.StatusConflict)
+		return
+	}
+
 	hosts[h.Name] = &h
 	for _, alias := range h.Aliases {
+		if _, exists := hosts[alias]; exists {
+			http.Error(w, fmt.Sprintf("alias %s already exists", alias), http.StatusConflict)
+			return
+		}
 		hosts[alias] = &h
 	}
 
 	w.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(w).Encode(h)
+	writeJSON(w, h, r)
 }
 
 func listTargets(w http.ResponseWriter, r *http.Request) {
@@ -348,10 +406,12 @@ func listTargets(w http.ResponseWriter, r *http.Request) {
 		"targets": h.Targets,
 	}
 
-	_ = json.NewEncoder(w).Encode(resp)
+	writeJSON(w, resp, r)
 }
 
 func setActiveTarget(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+
 	parts := strings.Split(r.URL.Path, "/")
 	if len(parts) != 4 || parts[3] != "target" {
 		http.Error(w, "invalid path", http.StatusBadRequest)
@@ -369,39 +429,48 @@ func setActiveTarget(w http.ResponseWriter, r *http.Request) {
 	}
 
 	hostsLock.Lock()
+	defer hostsLock.Unlock()
+
 	h, ok := hosts[hostname]
 	if !ok {
-		hostsLock.Unlock()
 		http.Error(w, "host not found", http.StatusNotFound)
 		return
 	}
 
 	if body.ActiveTarget < 0 || body.ActiveTarget >= len(h.Targets) {
-		hostsLock.Unlock()
-		http.Error(w, "invalid target", http.StatusBadRequest)
+		http.Error(w, "invalid target index", http.StatusBadRequest)
 		return
 	}
 
 	h.ActiveTarget = body.ActiveTarget
-	hostsLock.Unlock()
 
-	_ = json.NewEncoder(w).Encode(h)
+	// Respond with the updated host using writeJSON
+	writeJSON(w, h, r)
 }
 
 func deleteHost(w http.ResponseWriter, r *http.Request) {
 	name := strings.TrimPrefix(r.URL.Path, "/hosts/")
+
 	hostsLock.Lock()
 	defer hostsLock.Unlock()
+
 	h, ok := hosts[name]
 	if !ok {
-		http.Error(w, "not found", http.StatusNotFound)
+		http.Error(w, "host not found", http.StatusNotFound)
 		return
 	}
+
+	// Remove host and all its aliases
 	delete(hosts, h.Name)
 	for _, a := range h.Aliases {
 		delete(hosts, a)
 	}
-	w.WriteHeader(http.StatusNoContent)
+
+	// Respond with deleted host info
+	writeJSON(w, map[string]interface{}{
+		"deleted": h.Name,
+		"aliases": h.Aliases,
+	}, r)
 }
 
 func addAlias(w http.ResponseWriter, r *http.Request) {
@@ -411,6 +480,7 @@ func addAlias(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	hostname := parts[2]
+
 	var payload struct {
 		Alias string `json:"alias"`
 	}
@@ -421,25 +491,30 @@ func addAlias(w http.ResponseWriter, r *http.Request) {
 
 	hostsLock.Lock()
 	defer hostsLock.Unlock()
+
 	h, ok := hosts[hostname]
 	if !ok {
-		http.Error(w, "host not found", http.StatusNoContent)
+		http.Error(w, "host not found", http.StatusNotFound)
 		return
 	}
+
+	// Add alias if it doesn't exist
 	h.Aliases = appendIfMissing(h.Aliases, payload.Alias)
 	hosts[payload.Alias] = h
+
 	// Persist alias to disk
 	saveAliasToFile(payload.Alias, hostname)
 
-	_ = json.NewEncoder(w).Encode(h)
+	// Respond with updated host entry
+	writeJSON(w, h, r)
 }
 
-func adminHelp(w http.ResponseWriter, r *http.Request) {
+func adminManual(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	_, _ = w.Write([]byte(help))
+	_, _ = w.Write([]byte(manual))
 }
 
-func versionHandler(w http.ResponseWriter, r *http.Request) {
+func version(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{
 		"ddp_version": ddpVersion,
@@ -448,9 +523,9 @@ func versionHandler(w http.ResponseWriter, r *http.Request) {
 
 func startAdminAPI() {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", adminHelp)
-	mux.HandleFunc("/version", versionHandler)
-	mux.HandleFunc("/hosts", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/", adminManual)
+	mux.HandleFunc("/version", version)
+	mux.HandleFunc("/hosts", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case "GET":
 			listHosts(w, r)
@@ -459,8 +534,8 @@ func startAdminAPI() {
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
-	})
-	mux.HandleFunc("/hosts/", func(w http.ResponseWriter, r *http.Request) {
+	}))
+	mux.HandleFunc("/hosts/", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case strings.HasSuffix(r.URL.Path, "/alias") && r.Method == "POST":
 			addAlias(w, r)
@@ -473,10 +548,16 @@ func startAdminAPI() {
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
-	})
+	}))
 
-	log.Printf("Admin API running on %s\n", cfg.AdminAddr)
-	log.Fatal(http.ListenAndServe(cfg.AdminAddr, mux))
+	log.Printf(
+		"HTTPS Admin API running on %s protected: %v with cert=%s key=%s\n",
+		cfg.AdminAddr,
+		cfg.Token != "",
+		cfg.CertFile,
+		cfg.KeyFile,
+	)
+	log.Fatal(http.ListenAndServeTLS(cfg.AdminAddr, cfg.CertFile, cfg.KeyFile, mux))
 }
 
 // -----------------------------------------------------------------------------
@@ -677,6 +758,7 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	log.Printf("Starting Docker-DNS-Proxy version %v\n", ddpVersion)
 	go startDNS()
 	go startAdminAPI()
 	go startDockerWatcher(ctx)

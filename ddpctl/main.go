@@ -2,44 +2,68 @@ package main
 
 import (
 	"bytes"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/jedib0t/go-pretty/v6/table"
 	"github.com/jedib0t/go-pretty/v6/text"
 	"github.com/spf13/cobra"
 )
 
-var adminURL string
-
 type HostEntry struct {
 	Name         string   `json:"name"`
 	Url          string   `json:"url"`
 	Targets      []string `json:"targets"`
-	ActiveTarget int      `json:"active_targte"`
+	ActiveTarget int      `json:"active_target"`
 	Aliases      []string `json:"aliases,omitempty"`
 }
 
-var help = `
+type Config struct {
+	AdminURL string `json:"admin_url"`
+	Token    string `json:"token"`
+}
+
+var (
+	cfg        Config
+	configFile string
+)
+
+var manual = `
 DDPCTL(1)                    USER COMMANDS                    DDPCTL(1)
 
 NAME
        ddpctl - Command-line administration tool for docker-dns-proxy
 
 SYNOPSIS
-       ddpctl [--url <admin-api-url>] <command> [arguments]
+       ddpctl [--url <admin-api-url>] [--token <token>] [--config <file>] <command> [arguments]
 
 DESCRIPTION
        ddpctl is the administrative CLI for docker-dns-proxy. It allows users
        to list, add, and remove hosts, manage aliases, view and set active
        targets, and check the server version. All commands communicate with
        the Admin API of a running ddp instance.
+
+CONFIGURATION FILE
+       You can store the admin API URL and bearer token in a JSON configuration file
+       and pass it with the --config flag. Values in the configuration file are
+       used only if the corresponding command-line flags (--url, --token) are not provided.
+
+       Example configuration file (config.json):
+       
+       {
+           "admin_url": "https://dev.z90.org:5880",
+           "token":     "ThisIsASecretToken"
+       }
 
 ADMIN API URL
        By default, ddpctl uses http://localhost:6060. You can override it
@@ -58,7 +82,6 @@ COMMANDS
 
    add [name] [aliases]
        Add a host with optional comma-separated aliases. Aliases are optional.
-       If no aliases are provided, only the main host is created.
 
        Example:
            ddpctl add service.domain.org alias1.domain.org,alias2.domain.org
@@ -101,23 +124,64 @@ COMMANDS
        Example:
            ddpctl version
 
-   help
+   manual
        Display this help text.
 
 SEE ALSO
        ddp(1) - docker-dns-proxy server
 `
 
+// global client
+var client *http.Client
+
+func initHTTPClient(skipVerify bool) {
+	// skipVerify=true only for self-signed or dev certs
+	tr := &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: skipVerify},
+	}
+	client = &http.Client{
+		Transport: tr,
+		Timeout:   10 * time.Second,
+	}
+}
+
+func GetPager() string {
+	// Check if "less" is available
+	_, err := exec.LookPath("less")
+	if err == nil {
+		return "less"
+	}
+
+	// Fallback to "more" if "less" is not available
+	_, err = exec.LookPath("more")
+	if err == nil {
+		return "more"
+	}
+
+	// If no pager is available, return an empty string
+	return ""
+}
+
 func main() {
 	rootCmd := &cobra.Command{
-		Use:   "ddptl",
+		Use:   "ddpctl",
 		Short: "Admin CLI for docker-dns-proxy",
 		Long:  "Control the docker-dns-proxy",
 	}
 
-	rootCmd.PersistentFlags().StringVar(&adminURL, "url", "http://localhost:6060", "Admin API URL")
+	rootCmd.PersistentFlags().StringVar(&cfg.AdminURL, "url", "http://localhost:6060", "Admin API URL")
+	rootCmd.PersistentFlags().StringVar(&cfg.Token, "token", "", "Bearer token for admin API")
+	rootCmd.PersistentFlags().StringVar(&configFile, "config", "", "Optional config file with admin_url and token")
 
-	// list command
+	cobra.OnInitialize(func() {
+		if configFile != "" {
+			loadConfigFile(configFile)
+		}
+	})
+
+	initHTTPClient(true)
+
+	// commands
 	rootCmd.AddCommand(&cobra.Command{
 		Use:   "list",
 		Short: "List all hosts",
@@ -126,8 +190,7 @@ func main() {
 		},
 	})
 
-	// add host command
-	addCmd := &cobra.Command{
+	rootCmd.AddCommand(&cobra.Command{
 		Use:   "add [name] [aliases]",
 		Short: "Add a host with optional comma-separated aliases",
 		Args:  cobra.MinimumNArgs(1),
@@ -139,32 +202,26 @@ func main() {
 			}
 			addHost(name, aliases)
 		},
-	}
-	rootCmd.AddCommand(addCmd)
+	})
 
-	// delete host command
-	delCmd := &cobra.Command{
+	rootCmd.AddCommand(&cobra.Command{
 		Use:   "delete [name]",
 		Short: "Delete a host",
 		Args:  cobra.ExactArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
 			deleteHost(args[0])
 		},
-	}
-	rootCmd.AddCommand(delCmd)
+	})
 
-	// add alias command
-	aliasCmd := &cobra.Command{
+	rootCmd.AddCommand(&cobra.Command{
 		Use:   "alias [host] [alias]",
 		Short: "Add an alias to an existing host",
 		Args:  cobra.ExactArgs(2),
 		Run: func(cmd *cobra.Command, args []string) {
 			addAlias(args[0], args[1])
 		},
-	}
-	rootCmd.AddCommand(aliasCmd)
+	})
 
-	// list targets for all hosts
 	rootCmd.AddCommand(&cobra.Command{
 		Use:   "list-targets",
 		Short: "List all targets for all hosts",
@@ -173,7 +230,6 @@ func main() {
 		},
 	})
 
-	// list targets for specific host
 	rootCmd.AddCommand(&cobra.Command{
 		Use:   "targets [host]",
 		Short: "List all targets for a specific host",
@@ -183,7 +239,6 @@ func main() {
 		},
 	})
 
-	// set active target
 	rootCmd.AddCommand(&cobra.Command{
 		Use:   "set-target [host] [index]",
 		Short: "Set active target index for a host",
@@ -202,7 +257,32 @@ func main() {
 		Use:   "manual",
 		Short: "Show the manual page",
 		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Println(help)
+			// Use a pager if available; otherwise, fallback to direct output
+			pager := GetPager()
+			if pager == "" {
+				fmt.Println(manual)
+				return
+			}
+
+			// Set up the pager command
+			command := exec.Command(pager)
+			command.SysProcAttr = &syscall.SysProcAttr{Foreground: true} // Creates a new process group
+			command.Stdin = bytes.NewReader([]byte(manual))
+			command.Stdout = os.Stdout
+			command.Stderr = os.Stderr
+
+			// Run the pager and handle errors
+			err := command.Start()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "warning: running pager failed: %v\n", err)
+				fmt.Println(manual) // Fallback to printing the text if the pager fails
+			}
+
+			err = command.Wait()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "error: pager failed: %v\n", err)
+			}
+
 		},
 	})
 
@@ -210,19 +290,11 @@ func main() {
 		Use:   "version",
 		Short: "Show ddp server version",
 		Run: func(cmd *cobra.Command, args []string) {
-			resp, err := http.Get(adminURL + "/version")
-			if err != nil {
+			var v map[string]string
+			if err := getJSON("/version", &v); err != nil {
 				fmt.Println("Error:", err)
 				return
 			}
-			defer resp.Body.Close()
-
-			var v map[string]string
-			if err := json.NewDecoder(resp.Body).Decode(&v); err != nil {
-				fmt.Println("Error decoding response:", err)
-				return
-			}
-
 			fmt.Println("ddp server version:", v["ddp_version"])
 		},
 	})
@@ -233,28 +305,98 @@ func main() {
 	}
 }
 
-// ---------------- Admin API calls ----------------
+// -----------------------------------------------------------------------------
+// Config
+// -----------------------------------------------------------------------------
 
-func listHosts() {
-	resp, err := http.Get(adminURL + "/hosts")
+func loadConfigFile(path string) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		fmt.Println("Error reading config file:", err)
+		return
+	}
+	var fileCfg Config
+	if err := json.Unmarshal(data, &fileCfg); err != nil {
+		fmt.Println("Error parsing config file:", err)
+		return
+	}
+
+	// Only set values from file if not already set via flags
+	if cfg.AdminURL == "" {
+		cfg.AdminURL = fileCfg.AdminURL
+	}
+	if cfg.Token == "" {
+		cfg.Token = fileCfg.Token
+	}
+}
+
+// -----------------------------------------------------------------------------
+// HTTP Helpers
+// -----------------------------------------------------------------------------
+
+func makeRequest(method, path string, body io.Reader) (*http.Request, error) {
+	req, err := http.NewRequest(method, cfg.AdminURL+path, body)
+	if err != nil {
+		return nil, err
+	}
+	if cfg.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+cfg.Token)
+	}
+	if method == http.MethodPost || method == http.MethodPut {
+		req.Header.Set("Content-Type", "application/json")
+	}
+
+	return req, nil
+}
+
+func getJSON(path string, result interface{}) error {
+	req, err := makeRequest(http.MethodGet, path, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		data, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("error: %s", strings.TrimSpace(string(data)))
+	}
+	if result != nil {
+		return json.NewDecoder(resp.Body).Decode(result)
+	}
+	return nil
+}
+
+func postJSON(path string, data interface{}) {
+	b, _ := json.Marshal(data)
+	req, err := makeRequest(http.MethodPost, path, bytes.NewReader(b))
+	if err != nil {
+		fmt.Println("Error creating request:", err)
+		return
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		fmt.Println("Error:", err)
 		return
 	}
 	defer resp.Body.Close()
+	io.Copy(os.Stdout, resp.Body)
+	fmt.Println()
+}
 
+// -----------------------------------------------------------------------------
+// Admin API calls
+// -----------------------------------------------------------------------------
+
+func listHosts() {
 	var hosts []HostEntry
-	if err := json.NewDecoder(resp.Body).Decode(&hosts); err != nil {
-		fmt.Println("Error decoding response:", err)
+	if err := getJSON("/hosts", &hosts); err != nil {
+		fmt.Println(err)
 		return
 	}
-
-	// Sort hosts by name
-	sort.Slice(hosts, func(i, j int) bool {
-		return hosts[i].Name < hosts[j].Name
-	})
-
-	// Pretty print table using go-pretty
+	sort.Slice(hosts, func(i, j int) bool { return hosts[i].Name < hosts[j].Name })
 	t := table.NewWriter()
 	t.SetOutputMirror(os.Stdout)
 	t.SetStyle(table.StyleRounded)
@@ -264,32 +406,23 @@ func listHosts() {
 		if len(h.Aliases) > 0 {
 			aliasStr = "https://" + strings.Join(h.Aliases, ", ")
 		}
-
 		target := ""
 		if h.ActiveTarget >= 0 && h.ActiveTarget < len(h.Targets) {
 			target = h.Targets[h.ActiveTarget]
 		}
-		t.AppendRow(table.Row{
-			h.Name,
-			h.Url,
-			target,
-			aliasStr,
-		})
+		t.AppendRow(table.Row{h.Name, h.Url, target, aliasStr})
 	}
 	t.Style().Format.Header = text.FormatDefault
 	t.Render()
 }
 
 func addHost(name string, aliases []string) {
-	body := map[string]interface{}{
-		"name":    name,
-		"aliases": aliases,
-	}
+	body := map[string]interface{}{"name": name, "aliases": aliases}
 	postJSON("/hosts", body)
 }
 
 func deleteHost(name string) {
-	req, _ := http.NewRequest("DELETE", adminURL+"/hosts/"+name, nil)
+	req, _ := makeRequest(http.MethodDelete, "/hosts/"+name, nil)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		fmt.Println("Error:", err)
@@ -301,24 +434,15 @@ func deleteHost(name string) {
 
 func addAlias(host, alias string) {
 	body := map[string]string{"alias": alias}
-	postJSON(fmt.Sprintf("/hosts/%s/alias", host), body)
+	postJSON("/hosts/"+host+"/alias", body)
 }
 
 func listAllTargets() {
-	resp, err := http.Get(adminURL + "/hosts")
-	if err != nil {
-		fmt.Println("Error:", err)
-		return
-	}
-	defer resp.Body.Close()
-
 	var hosts []HostEntry
-	if err := json.NewDecoder(resp.Body).Decode(&hosts); err != nil {
-		fmt.Println("Error decoding response:", err)
+	if err := getJSON("/hosts", &hosts); err != nil {
+		fmt.Println(err)
 		return
 	}
-
-	// Sort hosts alphabetically
 	sort.Slice(hosts, func(i, j int) bool { return hosts[i].Name < hosts[j].Name })
 
 	t := table.NewWriter()
@@ -339,33 +463,18 @@ func listAllTargets() {
 			t.AppendRow(table.Row{hostName, i, active, target})
 		}
 	}
-
 	t.Style().Format.Header = text.FormatDefault
 	t.Render()
 }
 
 func listTargets(host string) {
-	resp, err := http.Get(adminURL + "/hosts/" + host + "/targets")
-	if err != nil {
-		fmt.Println("Error:", err)
-		return
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		fmt.Printf("Error: %s\n", strings.TrimSpace(string(body)))
-		return
-	}
-
 	var h struct {
 		Name    string   `json:"name"`
 		Active  int      `json:"active"`
 		Targets []string `json:"targets"`
 	}
-
-	if err := json.NewDecoder(resp.Body).Decode(&h); err != nil {
-		fmt.Println("Error decoding response:", err)
+	if err := getJSON("/hosts/"+host+"/targets", &h); err != nil {
+		fmt.Println(err)
 		return
 	}
 
@@ -373,7 +482,6 @@ func listTargets(host string) {
 	t.SetOutputMirror(os.Stdout)
 	t.SetStyle(table.StyleRounded)
 	t.AppendHeader(table.Row{"INDEX", "ACTIVE", "TARGET"})
-
 	for i, target := range h.Targets {
 		active := ""
 		if i == h.Active {
@@ -381,7 +489,6 @@ func listTargets(host string) {
 		}
 		t.AppendRow(table.Row{i, active, target})
 	}
-
 	t.Style().Format.Header = text.FormatDefault
 	t.Render()
 }
@@ -389,8 +496,12 @@ func listTargets(host string) {
 func setActiveTarget(host string, index int) {
 	body := map[string]int{"active_target": index}
 	b, _ := json.Marshal(body)
-
-	resp, err := http.Post(adminURL+"/hosts/"+host+"/target", "application/json", bytes.NewReader(b))
+	req, err := makeRequest(http.MethodPost, "/hosts/"+host+"/target", bytes.NewReader(b))
+	if err != nil {
+		fmt.Println("Error:", err)
+		return
+	}
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		fmt.Println("Error:", err)
 		return
@@ -403,7 +514,6 @@ func setActiveTarget(host string, index int) {
 		return
 	}
 
-	// Decode response to verify active target
 	var h struct {
 		Name         string   `json:"name"`
 		ActiveTarget int      `json:"active_target"`
@@ -417,17 +527,5 @@ func setActiveTarget(host string, index int) {
 	if h.ActiveTarget != index {
 		fmt.Printf("Warning: active target not set as requested. Current active: %d\n", h.ActiveTarget)
 	}
-	// Success: do nothing if ActiveTarget matches
-}
-
-func postJSON(path string, data interface{}) {
-	b, _ := json.Marshal(data)
-	resp, err := http.Post(adminURL+path, "application/json", bytes.NewReader(b))
-	if err != nil {
-		fmt.Println("Error:", err)
-		return
-	}
-	defer resp.Body.Close()
-	io.Copy(os.Stdout, resp.Body)
-	fmt.Println()
+	// success: do nothing if matches
 }
