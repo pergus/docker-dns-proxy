@@ -28,6 +28,7 @@ type Config struct {
 	KeyFile       string `json:"key_file"`
 	ListenAddr    string `json:"listen_addr"`              // e.g. ":443"
 	AdminAddr     string `json:"admin_addr"`               // e.g. ":8081"
+	DNSAddr       string `json:"dns_addr"`                 // e.g. ":53"
 	UpstreamDNS   string `json:"upstream_dns"`             // e.g. "8.8.8.8:53"
 	UpdatePeriod  int    `json:"update_period"`            // in seconds
 	ExcludedPorts []int  `json:"excluded_ports,omitempty"` // List of exluded ports
@@ -35,7 +36,7 @@ type Config struct {
 	AliasFile     string `json:"alias_file,omitempty"`     // filename to persist aliases
 }
 
-// HostEntry represents a DNS/proxy entry
+// HostEntry represents a DNS/proxy entryf
 type HostEntry struct {
 	Name    string   `json:"name"`
 	Url     string   `json:"url"`
@@ -151,9 +152,9 @@ AUTHOR
        Written by pergus.
 `
 
-// -------------------------
+// -----------------------------------------------------------------------------
 // Configuration
-// -------------------------
+// -----------------------------------------------------------------------------
 
 func loadConfig(path string) {
 	data, err := os.ReadFile(path)
@@ -170,9 +171,9 @@ func loadConfig(path string) {
 	}
 }
 
-// -------------------------
+// -----------------------------------------------------------------------------
 // Load Aliases
-// -------------------------
+// -----------------------------------------------------------------------------
 
 func appendIfMissing(slice []string, s string) []string {
 	for _, v := range slice {
@@ -228,9 +229,9 @@ func saveAliasToFile(alias, target string) {
 	}
 }
 
-// -------------------------
+// -----------------------------------------------------------------------------
 // REST Admin API
-// -------------------------
+// -----------------------------------------------------------------------------
 
 func listHosts(w http.ResponseWriter, r *http.Request) {
 	hostsLock.RLock()
@@ -354,9 +355,9 @@ func startAdminAPI() {
 	log.Fatal(http.ListenAndServe(cfg.AdminAddr, mux))
 }
 
-// -------------------------
+// -----------------------------------------------------------------------------
 // DNS Server
-// -------------------------
+// -----------------------------------------------------------------------------
 
 func handleDNS(w dns.ResponseWriter, r *dns.Msg) {
 	msg := new(dns.Msg)
@@ -408,14 +409,14 @@ func handleDNS(w dns.ResponseWriter, r *dns.Msg) {
 
 func startDNS() {
 	dns.HandleFunc(".", handleDNS)
-	server := &dns.Server{Addr: ":53", Net: "udp"}
-	log.Println("DNS server running on :53")
+	server := &dns.Server{Addr: cfg.DNSAddr, Net: "udp"}
+	log.Printf("DNS server running on %s", cfg.DNSAddr)
 	log.Fatal(server.ListenAndServe())
 }
 
-// -------------------------
+// -----------------------------------------------------------------------------
 // Docker Discovery
-// -------------------------
+// -----------------------------------------------------------------------------
 
 func startDockerWatcher(ctx context.Context) {
 	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
@@ -494,9 +495,9 @@ func startDockerWatcher(ctx context.Context) {
 	}
 }
 
-// -------------------------
+// -----------------------------------------------------------------------------
 // HTTPS Reverse Proxy
-// -------------------------
+// -----------------------------------------------------------------------------
 
 func reverseProxyHandler(w http.ResponseWriter, r *http.Request) {
 	host := r.Host
@@ -531,12 +532,12 @@ func startHTTPSServer() {
 	log.Fatal(http.ListenAndServeTLS(cfg.ListenAddr, cfg.CertFile, cfg.KeyFile, mux))
 }
 
-// -------------------------
+// -----------------------------------------------------------------------------
 // Help Functions
-// -------------------------
+// -----------------------------------------------------------------------------
 
 func getHostIP() (string, error) {
-	conn, err := net.Dial("udp", "8.8.8.8:80")
+	conn, err := net.Dial("udp", cfg.UpstreamDNS)
 	if err != nil {
 		return "", err
 	}
@@ -546,9 +547,9 @@ func getHostIP() (string, error) {
 	return localAddr.IP.String(), nil
 }
 
-// -------------------------
+// -----------------------------------------------------------------------------
 // Main
-// -------------------------
+// -----------------------------------------------------------------------------
 
 func main() {
 	configPath := flag.String("config", "config.json", "path to JSON config")

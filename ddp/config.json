@@ -1,9 +1,0 @@
-{
-  "domain":        "domain.org",
-  "cert_file":     "certs/domain.org.crt",
-  "key_file":      "certs/domain.org.key",
-  "listen_addr":   ":443",
-  "admin_addr":    ":6060",
-  "upstream_dns":  "192.168.2.10:53",
-  "update_period": 10
-}
