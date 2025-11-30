@@ -1,0 +1,138 @@
+
+DDP(1)                           USER COMMANDS                          DDP(1)
+
+NAME
+    ddp - Docker DNS Proxy
+
+SYNOPSIS
+    ddp [-c CONFIG] [-v]
+
+DESCRIPTION
+    DDP is a Docker-aware DNS and HTTPS reverse proxy. It automatically
+    discovers Docker containers on the host and exposes them with DNS entries
+    and HTTPS URLs under a configured domain.
+
+CONFIGURATION
+    Configuration is provided via a JSON file specified with -c.
+
+CONFIGURATION OPTIONS
+    The following options are available in the JSON config file:
+
+    Required:
+        "domain"        - The domain under which hosts will be exposed, e.g., "domain.org".
+        "listen_addr"   - Address for the HTTPS reverse proxy to listen on, e.g., ":443".
+        "admin_addr"    - Address for the admin HTTP API, e.g., ":6060".
+        "cert_file"     - Path to the TLS certificate file for HTTPS.
+        "key_file"      - Path to the TLS key file for HTTPS.
+        "upstream_dns"  - Upstream DNS server to forward unknown queries to, e.g., "8.8.8.8:53".
+
+    Optional:
+        "dns_addr"          - Address for the DNS server to listen on (default ":53").
+        "update_period"     - Period (in seconds) to refresh Docker container information (default 10).
+        "excluded_ports"    - List of container ports to ignore, e.g., [22, 2375].
+        "host_ip"           - IP returned in DNS responses (default: auto-detected).
+        "alias_file"        - Path to file where aliases are persisted (default "aliases.json").
+        "token"             - Bearer token for authentiction.
+
+	Notes:
+    	- host_ip is the IP that will appear in DNS responses for managed hosts. 
+    	  If not set, the server automatically detects a suitable host IP.
+    	- dns_addr is the interface the DNS server listens on. Can be 0.0.0.0:53
+    	  to listen on all interfaces.
+    	- update_period controls how often Docker containers are refreshed for new hosts.
+
+    Example configuration:
+
+ADMIN API
+    The Admin API provides endpoints for managing hosts, aliases, targets, and
+    retrieving the server version. All endpoints use HTTP and respond with JSON.
+	When appending ?pretty to a request, the JSON returned will be pretty formatted 
+
+LIST HOSTS
+    GET /hosts
+    Returns a JSON array of all registered hosts.
+    
+    Example:
+        curl -H "Authorization: Bearer <token>" https://<server>/hosts
+
+ADD HOST
+    POST /hosts
+    Adds a new host entry. You may optionally include aliases.
+
+    Request body (JSON):
+    {
+        "name": "<host>",
+        "aliases": ["<alias>"]
+    }
+
+    Example:
+        curl -X POST -H "Content-Type: application/json" \
+             -H "Authorization: Bearer <token>" \
+             -d '{"name":"<host>","aliases":["<alias>"]}' \
+             https://<server>/hosts
+
+DELETE HOST
+    DELETE /hosts/{hostname}
+    Deletes the specified host and all associated aliases.
+
+    Example:
+        curl -X DELETE -H "Authorization: Bearer <token>" \
+             https://<server>/hosts/<host>
+
+ADD ALIAS
+    POST /hosts/{hostname}/alias
+    Adds a new alias to an existing host.
+
+    Request body (JSON):
+    {
+        "alias": "<alias>"
+    }
+
+    Example:
+        curl -X POST -H "Content-Type: application/json" \
+             -H "Authorization: Bearer <token>" \
+             -d '{"alias":"<alias>"}' \
+             https://<server>/hosts/<host>/alias
+
+LIST TARGETS
+    GET /hosts/{hostname}/targets
+    Lists all targets for a given host along with the currently active target.
+
+    Response (JSON):
+    {
+        "name": "<host>",
+        "active": 0,
+        "targets": ["<ip:port1>", "<ip:port2>"]
+    }
+
+    Example:
+        curl -H "Authorization: Bearer <token>" \
+             https://<server>/hosts/<host>/targets
+
+SET ACTIVE TARGET
+    POST /hosts/{hostname}/target
+    Sets the active target for a host.
+
+    Request body (JSON):
+    {
+        "active_target": <target_index>
+    }
+
+    Example:
+        curl -X POST -H "Content-Type: application/json" \
+             -H "Authorization: Bearer <token>" \
+             -d '{"active_target":<target_index>}' \
+             https://<server>/hosts/<host>/target
+
+GET DDP VERSION
+    GET /version
+    Returns the current version of the DDP server.
+
+    Example:
+        curl -H "Authorization: Bearer <token>" https://<server>/version
+
+SEE ALSO
+    ddpctl(1)
+
+AUTHOR
+       Written by pergus.

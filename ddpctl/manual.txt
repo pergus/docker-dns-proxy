@@ -1,0 +1,91 @@
+
+DDPCTL(1)                    USER COMMANDS                    DDPCTL(1)
+
+NAME
+       ddpctl - Command-line administration tool for docker-dns-proxy
+
+SYNOPSIS
+       ddpctl [--url <admin-api-url>] [--token <token>] [--config <file>] <command> [arguments]
+
+DESCRIPTION
+       ddpctl is the administrative CLI for docker-dns-proxy. It allows users
+       to list, add, and remove hosts, manage aliases, view and set active
+       targets, and check the server version. All commands communicate with
+       the Admin API of a running ddp instance.
+
+CONFIGURATION FILE
+       You can store the admin API URL and bearer token in a JSON configuration file
+       and pass it with the --config flag. Values in the configuration file are
+       used only if the corresponding command-line flags (--url, --token) are not provided.
+
+       Example configuration file (config.json):
+       
+       {
+           "admin_url": "https://dev.z90.org:5880",
+           "token":     "ThisIsASecretToken"
+       }
+
+ADMIN API URL
+       By default, ddpctl uses http://localhost:6060. You can override it
+       using:
+
+           --url <admin-api-url>
+
+COMMANDS
+
+   list
+       List all hosts registered in docker-dns-proxy. Displays the host name,
+       main URL, current active target, and any aliases.
+
+       Example:
+           ddpctl --url http://<server>:6060 list
+
+   add [name] [aliases]
+       Add a host with optional comma-separated aliases. Aliases are optional.
+
+       Example:
+           ddpctl add service.domain.org alias1.domain.org,alias2.domain.org
+
+   delete [name]
+       Remove a host and all its aliases.
+
+       Example:
+           ddpctl delete service.domain.org
+
+   alias [host] [alias]
+       Add a new alias to an existing host.
+
+       Example:
+           ddpctl alias service.domain.org alias-main.domain.org
+
+   list-targets
+       List all targets for all hosts. The active target for each host is
+       indicated with an asterisk (*) in the "ACTIVE" column.
+
+       Example:
+           ddpctl list-targets
+
+   targets [host]
+       List all targets for a specific host, showing the active target.
+
+       Example:
+           ddpctl targets service.domain.org
+
+   set-target [host] [index]
+       Set the active target index for a host. The index corresponds to the
+       position of the target in the host's target list.
+
+       Example:
+           ddpctl set-target service.domain.org 1
+
+   version
+       Show the running ddp server version.
+
+       Example:
+           ddpctl version
+
+   manual
+       Display this help text.
+
+SEE ALSO
+       ddp(1) - docker-dns-proxy server
