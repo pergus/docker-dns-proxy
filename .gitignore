@@ -33,7 +33,7 @@ go.work.sum
 
 # Exclude binaries
 ddp/ddp
-ddptcl/ddpctl
+ddpctl/ddpctl
 
 # Exclude config and certs
 ddp/config.json

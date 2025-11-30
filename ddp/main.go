@@ -9,13 +9,14 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"os"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/client"
 	"github.com/miekg/dns"
 	"golang.org/x/net/context"
@@ -38,10 +39,11 @@ type Config struct {
 
 // HostEntry represents a DNS/proxy entryf
 type HostEntry struct {
-	Name    string   `json:"name"`
-	Url     string   `json:"url"`
-	Targets []string `json:"targets"`
-	Aliases []string `json:"aliases,omitempty"`
+	Name         string   `json:"name"`
+	Url          string   `json:"url"`
+	Targets      []string `json:"targets"`
+	ActiveTarget int      `json:"active_target"`
+	Aliases      []string `json:"aliases,omitempty"`
 }
 
 var (
@@ -61,96 +63,150 @@ SYNOPSIS
     ddp [-c CONFIG] [-v]
 
 DESCRIPTION
-    DDP is a simple Docker-aware DNS and HTTPS reverse proxy. It automatically
+    DDP is a Docker-aware DNS and HTTPS reverse proxy. It automatically
     discovers Docker containers on the host and exposes them with DNS entries
     and HTTPS URLs under a configured domain.
 
 CONFIGURATION
-    Configuration is provided via a JSON file specified with -c. Example:
+    Configuration is provided via a JSON file specified with -c.
 
-        {
-            "domain": "domain.org",
-            "listen_addr": ":443",
-            "admin_addr": ":6060",
-            "cert_file": "./certs/domain.org.crt",
-            "key_file": "./certs/domain.org.key",
-            "upstream_dns": "8.8.8.8:53",
-            "update_period": 10,
-            "excluded_ports": [22, 2375],
-            "alias_file": "aliases.json"
-        }
+CONFIGURATION OPTIONS
+    The following options are available in the JSON config file:
+
+    Required:
+        "domain"        - The domain under which hosts will be exposed, e.g., "domain.org".
+        "listen_addr"   - Address for the HTTPS reverse proxy to listen on, e.g., ":443".
+        "admin_addr"    - Address for the admin HTTP API, e.g., ":6060".
+        "cert_file"     - Path to the TLS certificate file for HTTPS.
+        "key_file"      - Path to the TLS key file for HTTPS.
+        "upstream_dns"  - Upstream DNS server to forward unknown queries to, e.g., "8.8.8.8:53".
+
+    Optional:
+        "dns_addr"          - Address for the DNS server to listen on (default ":53").
+        "update_period"     - Period (in seconds) to refresh Docker container information (default 10).
+        "excluded_ports"    - List of container ports to ignore, e.g., [22, 2375].
+        "host_ip"           - IP returned in DNS responses (default: auto-detected).
+        "alias_file"        - Path to file where aliases are persisted (default "aliases.json").
+
+	Notes:
+    	- host_ip is the IP that will appear in DNS responses for managed hosts. 
+    	  If not set, the server automatically detects a suitable host IP.
+    	- dns_addr is the interface the DNS server listens on. Can be 0.0.0.0:53
+    	  to listen on all interfaces.
+    	- update_period controls how often Docker containers are refreshed for new hosts.
+
+    Example configuration:
 
 ADMIN API
-    • List hosts
-      GET /hosts
-      Response: JSON array of all hosts
+    The Admin API provides endpoints for managing hosts, aliases, targets, and
+    retrieving the server version. All endpoints use HTTP and respond with JSON.
 
-    • Add host
-      POST /hosts
-      Content-Type: application/json
-      Body example:
-      {
-          "name": "service.domain.org",
-          "aliases": ["srv.domain.org"]
-      }
+LIST HOSTS
+    GET /hosts
+    Returns a JSON array of all registered hosts.
+    
+    Example:
+        curl http://<server>/hosts
 
-    • Delete host
-      DELETE /hosts/{hostname}
-      Example: DELETE /hosts/service.domain.org
+ADD HOST
+    POST /hosts
+    Adds a new host entry. You may optionally include aliases.
 
-    • Add alias to existing host
-      POST /hosts/{hostname}/alias
-      Content-Type: application/json
-      Body example:
-      {
-          "alias": "srv-main.domain.org"
-      }
+    Request body (JSON):
+    {
+        "name": "<host>",
+        "aliases": ["<alias>"]
+    }
 
-    • Get DDP version
-      GET /version
+    Example:
+        curl -X POST -H "Content-Type: application/json" \
+             -d '{"name":"<host>","aliases":["<alias>"]}' \
+             http://<server>/hosts
 
-COMMANDS (DDPCTL)
-    ddpctl is the command-line client for managing DDP.
+DELETE HOST
+    DELETE /hosts/{hostname}
+    Deletes the specified host and all associated aliases.
 
-    list
-        List all hosts with their targets and aliases.
-        Example: ddpctl list --url http://localhost:6060
+    Example:
+        curl -X DELETE http://<server>/hosts/<host>
 
-    add [name] [aliases]
-        Add a host with optional comma-separated aliases.
-        Example: ddpctl add hasura.z90.org hge.z90.org
+ADD ALIAS
+    POST /hosts/{hostname}/alias
+    Adds a new alias to an existing host.
 
-    delete [name]
-        Delete a host.
-        Example: ddpctl delete hasura.z90.org
+    Request body (JSON):
+    {
+        "alias": "<alias>"
+    }
 
-    alias [host] [alias]
-        Add an alias to an existing host.
-        Example: ddpctl alias hasura.z90.org hge-main.z90.org
+    Example:
+        curl -X POST -H "Content-Type: application/json" \
+             -d '{"alias":"<alias>"}' \
+             http://<server>/hosts/<host>/alias
 
-    version
-        Show DDP server version.
-        Example: ddpctl version --url http://localhost:6060
+LIST TARGETS
+    GET /hosts/{hostname}/targets
+    Lists all targets for a given host along with the currently active target.
 
-EXAMPLES
-    List all hosts:
-        ddpctl list
+    Response (JSON):
+    {
+        "name": "<host>",
+        "active": 0,
+        "targets": ["<ip:port1>", "<ip:port2>"]
+    }
 
-    Add a host with aliases:
-        ddpctl add hasura.z90.org hge.z90.org
+    Example:
+        curl http://<server>/hosts/<host>/targets
 
-    Delete a host:
-        ddpctl delete hasura.z90.org
+SET ACTIVE TARGET
+    POST /hosts/{hostname}/target
+    Sets the active target for a host.
 
-    Add an alias to an existing host:
-        ddpctl alias hasura.z90.org hge-main.z90.org
+    Request body (JSON):
+    {
+        "active_target": <target_index>
+    }
 
-    Show server version:
-        ddpctl version
+    Example:
+        curl -X POST -H "Content-Type: application/json" \
+             -d '{"active_target":<target_index>}' \
+             http://<server>/hosts/<host>/target
+
+GET DDP VERSION
+    GET /version
+    Returns the current version of the DDP server.
+
+    Example:
+        curl http://<server>/version
+
+SEE ALSO
+    ddpctl(1)
 
 AUTHOR
        Written by pergus.
 `
+
+// -----------------------------------------------------------------------------
+// Help Functions
+// -----------------------------------------------------------------------------
+
+func getHostIP() (string, error) {
+	conn, err := net.Dial("udp", cfg.UpstreamDNS)
+	if err != nil {
+		return "", err
+	}
+	defer conn.Close()
+
+	localAddr := conn.LocalAddr().(*net.UDPAddr)
+	return localAddr.IP.String(), nil
+}
+
+func appendIfMissing(slice []string, s string) []string {
+	if slices.Contains(slice, s) {
+		return slice
+	}
+	return append(slice, s)
+}
 
 // -----------------------------------------------------------------------------
 // Configuration
@@ -169,20 +225,26 @@ func loadConfig(path string) {
 	if cfg.AliasFile == "" {
 		cfg.AliasFile = "aliases.json"
 	}
+
+	// default update period if not set
+	if cfg.UpdatePeriod <= 0 {
+		cfg.UpdatePeriod = 10 // default 10 seconds
+	}
+
+	// detected HostIP if empty
+	if cfg.HostIP == "" {
+		ip, err := getHostIP()
+		if err != nil {
+			log.Printf("Failed to detect host IP, you should set host_ip in config: %v", err)
+		} else {
+			cfg.HostIP = ip
+		}
+	}
 }
 
 // -----------------------------------------------------------------------------
 // Load Aliases
 // -----------------------------------------------------------------------------
-
-func appendIfMissing(slice []string, s string) []string {
-	for _, v := range slice {
-		if v == s {
-			return slice
-		}
-	}
-	return append(slice, s)
-}
 
 func loadAliases() {
 	data, err := os.ReadFile(cfg.AliasFile)
@@ -267,6 +329,65 @@ func addHost(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(h)
 }
 
+func listTargets(w http.ResponseWriter, r *http.Request) {
+	name := strings.TrimPrefix(r.URL.Path, "/hosts/")
+	name = strings.TrimSuffix(name, "/targets")
+
+	hostsLock.RLock()
+	h, ok := hosts[name]
+	hostsLock.RUnlock()
+
+	if !ok {
+		http.Error(w, "host not found", http.StatusNotFound)
+		return
+	}
+
+	resp := map[string]interface{}{
+		"name":    h.Name,
+		"active":  h.ActiveTarget,
+		"targets": h.Targets,
+	}
+
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+func setActiveTarget(w http.ResponseWriter, r *http.Request) {
+	parts := strings.Split(r.URL.Path, "/")
+	if len(parts) != 4 || parts[3] != "target" {
+		http.Error(w, "invalid path", http.StatusBadRequest)
+		return
+	}
+	hostname := parts[2]
+
+	var body struct {
+		ActiveTarget int `json:"active_target"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	hostsLock.Lock()
+	h, ok := hosts[hostname]
+	if !ok {
+		hostsLock.Unlock()
+		http.Error(w, "host not found", http.StatusNotFound)
+		return
+	}
+
+	if body.ActiveTarget < 0 || body.ActiveTarget >= len(h.Targets) {
+		hostsLock.Unlock()
+		http.Error(w, "invalid target", http.StatusBadRequest)
+		return
+	}
+
+	h.ActiveTarget = body.ActiveTarget
+	hostsLock.Unlock()
+
+	_ = json.NewEncoder(w).Encode(h)
+}
+
 func deleteHost(w http.ResponseWriter, r *http.Request) {
 	name := strings.TrimPrefix(r.URL.Path, "/hosts/")
 	hostsLock.Lock()
@@ -340,15 +461,18 @@ func startAdminAPI() {
 		}
 	})
 	mux.HandleFunc("/hosts/", func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasSuffix(r.URL.Path, "/alias") && r.Method == "POST" {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/alias") && r.Method == "POST":
 			addAlias(w, r)
-			return
-		}
-		if r.Method == "DELETE" {
+		case strings.HasSuffix(r.URL.Path, "/targets") && r.Method == "GET":
+			listTargets(w, r)
+		case strings.HasSuffix(r.URL.Path, "/target") && r.Method == "POST":
+			setActiveTarget(w, r)
+		case r.Method == "DELETE":
 			deleteHost(w, r)
-			return
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	})
 
 	log.Printf("Admin API running on %s\n", cfg.AdminAddr)
@@ -426,16 +550,11 @@ func startDockerWatcher(ctx context.Context) {
 
 	// helper to check if port is excluded
 	portExcluded := func(port int) bool {
-		for _, p := range cfg.ExcludedPorts {
-			if p == port {
-				return true
-			}
-		}
-		return false
+		return slices.Contains(cfg.ExcludedPorts, port)
 	}
 
 	addContainers := func() {
-		containers, err := cli.ContainerList(ctx, types.ContainerListOptions{})
+		containers, err := cli.ContainerList(ctx, container.ListOptions{})
 		if err != nil {
 			log.Printf("docker list error: %v", err)
 			return
@@ -474,7 +593,14 @@ func startDockerWatcher(ctx context.Context) {
 					Url:     "https://" + name + "." + cfg.Domain,
 					Targets: []string{target},
 				}
-				hosts[h.Name] = h
+				// add the target to the Targets array
+				existing, ok := hosts[h.Name]
+				if ok {
+					existing.Targets = appendIfMissing(existing.Targets, target)
+				} else {
+					h.ActiveTarget = 0
+					hosts[h.Name] = h
+				}
 			}
 		}
 	}
@@ -509,7 +635,13 @@ func reverseProxyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	target := h.Targets[0] // pick first target
+	idx := h.ActiveTarget
+	if idx < 0 || idx >= len(h.Targets) {
+		http.Error(w, "invalid active target", http.StatusInternalServerError)
+		return
+	}
+	target := h.Targets[idx]
+
 	u, err := url.Parse("http://" + target)
 	if err != nil {
 		http.Error(w, "bad target", http.StatusInternalServerError)
@@ -533,21 +665,6 @@ func startHTTPSServer() {
 }
 
 // -----------------------------------------------------------------------------
-// Help Functions
-// -----------------------------------------------------------------------------
-
-func getHostIP() (string, error) {
-	conn, err := net.Dial("udp", cfg.UpstreamDNS)
-	if err != nil {
-		return "", err
-	}
-	defer conn.Close()
-
-	localAddr := conn.LocalAddr().(*net.UDPAddr)
-	return localAddr.IP.String(), nil
-}
-
-// -----------------------------------------------------------------------------
 // Main
 // -----------------------------------------------------------------------------
 
@@ -556,16 +673,6 @@ func main() {
 	flag.Parse()
 
 	loadConfig(*configPath)
-
-	// Only call getHostIP if user hasn't set HostIP in config
-	if cfg.HostIP == "" {
-		ip, err := getHostIP()
-		if err != nil {
-			log.Printf("Failed to get host IP: %v", err)
-		} else {
-			cfg.HostIP = ip
-		}
-	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

@@ -1,5 +1,7 @@
 # Todo list
 
+- Authentication
+
 - Logging
 
   Implements logging with options to log to stdout and/or to a logfile and/or
@@ -130,157 +132,11 @@ Sample configuration file
     "file": { "enabled": true, "filename": "ddp.log",
       "rotation": { "size_mb": 10, "max_backups": 5, "max_age_days": 7 }
     },
-    "victoria": { "enabled": false, "url": "http://victoria.local:3100/loki/api/v1/push", "labels": "{app=\"ddp\"}" }
+    "victoria": { "enabled": false, "url": "http://victoria.local:3100/api/v1/push", "labels": "{app=\"ddp\"}" }
   }
 }
 ```
 
 
-
-
-- Targets
-
-  Make it possible to list all targets and select which of the tagets should
-  be the active target.
-
-
-
-Extend Host Entry with ActiveIndex:
-```
-type HostEntry struct {
-    Name        string   `json:"name"`
-    Url         string   `json:"url"`
-    Targets     []string `json:"targets"`
-    Aliases     []string `json:"aliases,omitempty"`
-    ActiveIndex int      `json:"active_index"`
-}
-```
-
-Modify the reverse proxy and change:
-
-```
-target := h.Targets[0]
-```
-
-with
-
-```
-idx := h.ActiveIndex
-if idx < 0 || idx >= len(h.Targets) {
-    http.Error(w, "invalid active target", http.StatusInternalServerError)
-    return
-}
-target := h.Targets[idx]
-```
-
-
-Add new API endpoint to list the targets.
-
-```
-func listTargets(w http.ResponseWriter, r *http.Request) {
-    name := strings.TrimPrefix(r.URL.Path, "/hosts/")
-    name = strings.TrimSuffix(name, "/targets")
-
-    hostsLock.RLock()
-    h, ok := hosts[name]
-    hostsLock.RUnlock()
-
-    if !ok {
-        http.Error(w, "host not found", http.StatusNotFound)
-        return
-    }
-
-    resp := map[string]interface{}{
-        "name":    h.Name,
-        "active":  h.ActiveIndex,
-        "targets": h.Targets,
-    }
-
-    _ = json.NewEncoder(w).Encode(resp)
-}
-```
-
-Add new API endpoint to set active target.
-
-```
-func setActiveTarget(w http.ResponseWriter, r *http.Request) {
-    parts := strings.Split(r.URL.Path, "/")
-    if len(parts) != 4 || parts[3] != "target" {
-        http.Error(w, "invalid path", http.StatusBadRequest)
-        return
-    }
-    hostname := parts[2]
-
-    var body struct {
-        ActiveIndex int `json:"active_index"`
-    }
-
-    if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-        http.Error(w, err.Error(), http.StatusBadRequest)
-        return
-    }
-
-    hostsLock.Lock()
-    h, ok := hosts[hostname]
-    if !ok {
-        hostsLock.Unlock()
-        http.Error(w, "host not found", http.StatusNotFound)
-        return
-    }
-
-    if body.ActiveIndex < 0 || body.ActiveIndex >= len(h.Targets) {
-        hostsLock.Unlock()
-        http.Error(w, "invalid index", http.StatusBadRequest)
-        return
-    }
-
-    h.ActiveIndex = body.ActiveIndex
-    hostsLock.Unlock()
-
-    _ = json.NewEncoder(w).Encode(h)
-}
-```
-
-Add the new targets to startAdminAPI.
-
-```
-mux.HandleFunc("/hosts/", func(w http.ResponseWriter, r *http.Request) {
-    switch {
-    case strings.HasSuffix(r.URL.Path, "/alias") && r.Method == "POST":
-        addAlias(w, r)
-    case strings.HasSuffix(r.URL.Path, "/targets") && r.Method == "GET":
-        listTargets(w, r)
-    case strings.HasSuffix(r.URL.Path, "/target") && r.Method == "POST":
-        setActiveTarget(w, r)
-    case r.Method == "DELETE":
-        deleteHost(w, r)
-    default:
-        http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-    }
-})
-```
-
-
-Update docker watcher.
-Replace
-
-```
-hosts[h.Name] = h
-```
-
-with
-
-```
-existing, ok := hosts[h.Name]
-if ok {
-    existing.Targets = appendIfMissing(existing.Targets, target)
-} else {
-    h.ActiveIndex = 0
-    hosts[h.Name] = h
-}
-```
-
-
-Add target command to ddpctl.
 
 
