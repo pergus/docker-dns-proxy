@@ -498,9 +498,10 @@ func addAlias(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Add alias if it doesn't exist
-	h.Aliases = appendIfMissing(h.Aliases, payload.Alias)
-	hosts[payload.Alias] = h
+	// Add alias if it doesn't exist and is not equal to h.Name
+	if payload.Alias != h.Name {
+		h.Aliases = appendIfMissing(h.Aliases, payload.Alias)
+	}
 
 	// Persist alias to disk
 	saveAliasToFile(payload.Alias, hostname)
