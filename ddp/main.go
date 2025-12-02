@@ -28,10 +28,10 @@ type Config struct {
 	Domain        string `json:"domain"`
 	CertFile      string `json:"cert_file"`
 	KeyFile       string `json:"key_file"`
-	ListenAddr    string `json:"listen_addr"`              // e.g. ":443"
-	AdminAddr     string `json:"admin_addr"`               // e.g. ":8081"
-	DNSAddr       string `json:"dns_addr"`                 // e.g. ":53"
-	UpstreamDNS   string `json:"upstream_dns"`             // e.g. "8.8.8.8:53"
+	ProxyAddr     string `json:"proxy_address"`            // e.g. ":443"
+	AdminAddr     string `json:"admin_address"`            // e.g. ":8081"
+	DNSAddr       string `json:"dns_address"`              // e.g. ":53"
+	UpstreamDNS   string `json:"upstream_dns_address"`     // e.g. "8.8.8.8:53"
 	UpdatePeriod  int    `json:"update_period"`            // in seconds
 	ExcludedPorts []int  `json:"excluded_ports,omitempty"` // List of exluded ports
 	HostIP        string `json:"host_ip,omitempty"`        // The Host IP Address
@@ -742,8 +742,8 @@ func startHTTPSServer() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", reverseProxyHandler)
 
-	log.Printf("HTTPS reverse proxy running on %s with cert=%s key=%s\n", cfg.ListenAddr, cfg.CertFile, cfg.KeyFile)
-	log.Fatal(http.ListenAndServeTLS(cfg.ListenAddr, cfg.CertFile, cfg.KeyFile, mux))
+	log.Printf("HTTPS reverse proxy running on %s with cert=%s key=%s\n", cfg.ProxyAddr, cfg.CertFile, cfg.KeyFile)
+	log.Fatal(http.ListenAndServeTLS(cfg.ProxyAddr, cfg.CertFile, cfg.KeyFile, mux))
 }
 
 // -----------------------------------------------------------------------------
