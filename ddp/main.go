@@ -76,25 +76,25 @@ CONFIGURATION OPTIONS
     The following options are available in the JSON config file:
 
     Required:
-        "domain"        - The domain under which hosts will be exposed, e.g., "domain.org".
-        "listen_addr"   - Address for the HTTPS reverse proxy to listen on, e.g., ":443".
-        "admin_addr"    - Address for the admin HTTP API, e.g., ":6060".
-        "cert_file"     - Path to the TLS certificate file for HTTPS.
-        "key_file"      - Path to the TLS key file for HTTPS.
-        "upstream_dns"  - Upstream DNS server to forward unknown queries to, e.g., "8.8.8.8:53".
+        "domain"                - The domain under which hosts will be exposed, e.g., "domain.org".
+        "proxy_address"         - Address for the HTTPS reverse proxy to listen on, e.g., ":443".
+        "admin_address"         - Address for the admin HTTP API, e.g., ":6060".
+        "cert_file"             - Path to the TLS certificate file for HTTPS.
+        "key_file"              - Path to the TLS key file for HTTPS.
+        "upstream_dns_address"  - Upstream DNS server to forward unknown queries to, e.g., "8.8.8.8:53".
 
     Optional:
-        "dns_addr"          - Address for the DNS server to listen on (default ":53").
-        "update_period"     - Period (in seconds) to refresh Docker container information (default 10).
-        "excluded_ports"    - List of container ports to ignore, e.g., [22, 2375].
-        "host_ip"           - IP returned in DNS responses (default: auto-detected).
-        "alias_file"        - Path to file where aliases are persisted (default "aliases.json").
-        "token"             - Bearer token for authentiction.
+        "dns_address"           - Address for the DNS server to listen on (default ":53").
+        "update_period"         - Period (in seconds) to refresh Docker container information (default 10).
+        "excluded_ports"        - List of container ports to ignore, e.g., [22, 2375].
+        "host_ip"               - IP returned in DNS responses (default: auto-detected).
+        "alias_file"            - Path to file where aliases are persisted (default "aliases.json").
+        "token"                 - Bearer token for authentiction.
 
 	Notes:
     	- host_ip is the IP that will appear in DNS responses for managed hosts. 
     	  If not set, the server automatically detects a suitable host IP.
-    	- dns_addr is the interface the DNS server listens on. Can be 0.0.0.0:53
+    	- dns_address is the interface the DNS server listens on. Can be 0.0.0.0:53
     	  to listen on all interfaces.
     	- update_period controls how often Docker containers are refreshed for new hosts.
 
