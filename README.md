@@ -10,6 +10,7 @@ Docker DNS Proxy (DDP) is a Docker-aware DNS and HTTPS reverse proxy that automa
 ## Table of Contents
 
 - [Features](#features)
+- [What are Hosts and Targets](#what-are-hosts-and-targets)
 - [Installation](#installation)
 - [Usage](#usage)
   - [ddp (Server)](#ddp-server)
@@ -27,6 +28,20 @@ Docker DNS Proxy (DDP) is a Docker-aware DNS and HTTPS reverse proxy that automa
 - Add/remove hosts and aliases dynamically.
 - JSON-based Admin API with optional pretty printing.
 - CLI tool (`ddpctl`) for quick administration of hosts, aliases, and targets.
+
+---
+
+## What are Hosts and Targets
+
+A host is a public-facing docker service name such as gitea.example.org.
+It represents a single logical docker service exposed through DNS and HTTPS.
+
+A host may have multiple targets, where each target is an internal Docker backend endpoint in the form IP:port (for example, 172.18.0.2:3000).
+
+Only one target is active at any moment. The reverse proxy forwards all traffic for that host to the active target.
+
+Hosts may also have aliases, which are additional DNS names that map to the same underlying host entry.
+
 
 ---
 
